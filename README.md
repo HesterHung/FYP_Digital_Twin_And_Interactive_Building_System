@@ -35,8 +35,8 @@ The workflow combines:
 - AI-assisted modelling
 - Manual refinement
 
----
-# Demo Video 
+
+## Demo Video 
 https://youtu.be/Np9dWAJ1WWE?si=OJ0QvrRnCjOV7s2j
 
 ---
@@ -61,7 +61,7 @@ High-fidelity immersive digital twin developed in Unreal Engine.
 - Dynamic lighting
 - Collision setup
 
-
+---
 # Three.js Web Viewer
 
 Browser-based visualization with optimized WebGL rendering.
@@ -170,7 +170,7 @@ Security mechanisms include:
 - Software Architecture
 - Performance Optimization
 
----
+
 ## Asset Availability
 
 The original project was developed as part of a university research project.
