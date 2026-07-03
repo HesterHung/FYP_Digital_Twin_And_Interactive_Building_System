@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Third Person Character Controller</title>
+  <style>
+    #scene-container {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      /* NEW: This allows clicks to pass through the canvas */
+    }
+
+    .container {
+      /* ... existing styles ... */
+      z-index: 1;
+      /* NEW: Ensures the form is above the canvas */
+      position: relative;
+      /* NEW: Required for z-index to work */
+    }
+
+    #controls-info {
+      position: absolute;
+      bottom: 20px;
+      left: 20px;
+      max-width: 60%;
+      background: rgba(0, 0, 0, 0.7);
+      color: white;
+      padding: 10px;
+      border-radius: 4px;
+      font-family: Arial, sans-serif;
+    }
+
+    @media (max-width: 600px) {
+      #controls-info {
+        display: none;
+      }
+    }
+
+    .form-group {
+      margin-bottom: 15px;
+    }
+
+    .form-group input {
+      width: 100%;
+      padding: 8px;
+      margin-top: 5px;
+    }
+
+    .button {
+      padding: 10px 20px;
+      background-color: #007bff;
+      color: white;
+      border: none;
+      cursor: pointer;
+      margin-right: 10px;
+    }
+
+    .button:hover {
+      background-color: #0056b3;
+    }
+
+    .error {
+      color: red;
+      margin-top: 10px;
+    }
+
+    .success {
+      color: green;
+      margin-top: 10px;
+    }
+
+    body {
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      background-color: #333;
+      color: white;
+    }
+  </style>
+  <script async src="https://unpkg.com/es-module-shims/dist/es-module-shims.js"></script>
+  <script type="importmap">
+      {
+        "imports": {
+          "three": "../lib/three.js-master/build/three.module.js",
+          "three/addons/": "../lib/three.js-master/examples/jsm/",
+          "socket.io-client": "../lib/socket.io-client/dist/socket.io.esm.min.js"
+        }
+      }
+    </script>
+</head>
+
+<body>
+  <div id="scene-container"></div>
+  <div id="controls-info">
+    WASD - Move | SPACE - Jump | SHIFT - Run | Left Click - Interact | Right
+    Click - Rotate Camera
+  </div>
+
+  <script type="module">
+    import { Metaverse } from "./core/metaverse.js";
+    import MetaverseAPI from "./core/MetaverseApi.js";
+    import * as THREE from "three";
+    import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+
+    // Initialize the metaverse with custom options
+    async function initMetaverse() {
+      // Pass MetaverseAPI as a dependency to Metaverse
+      const metaverse = new Metaverse(
+        "scene-container",
+        {
+          // Disable default environment by passing an empty or safe dummy path
+          // The 404 error happens because Metaverse.js defaults to podiumv4.glb if not provided.
+          // However, since we want to suppress that default but not load a background,
+          // we can point it to a small valid GLB or handle it by making it a transparent/empty placeholder.
+          // Since we can't easily change core logic without editing core files, 
+          // a workaround is to point to the SAME model we want to walk on, but maybe make it invisible or just load it here directly.
+
+          // OPTION 1: Just load the Chinese Garden here as the environment.
+          // This is actually cleaner than addWalkableSurface if it's the main map.
+          progressiveEnvironment: {
+            basePath: "./src/assets/ChineseGarden/",
+            stages: ["web_model_Chinese_Garden_ver4_Final.glb", "web_model_Chinese_Garden_ver4_Final_1.glb", "web_model_Chinese_Garden_ver4_Final_2.glb", "web_model_Chinese_Garden_ver4_Final_3.glb"],
+            stageDelay: 1500, // ms between loading stages
+          },
+          //environmentPath: "src/assets/ChineseGarden/web_model_Chinese_Garden_ver4_Final_1.glb",
+          environmentPosition: { x: 0, y: 0, z: 0 },
+          characterScale: { x: 1, y: 1, z: 1 },
+          environmentScale: { x: 1, y: 1, z: 1 },
+          movingArea: { minX: -300, maxX: 300, minZ: -300, maxZ: 300 },
+          showBoundaries: false,
+          enableSaveLoad: false,
+          storageKey: "defaultMetaverse",
+          initialUserPosition: {
+            x: -6.5,
+            y: 5, // Spawn higher to avoid starting under the model
+            z: -12.5,
+          },
+          initialUserRotation: {
+            x: 0,
+            y: (3 * Math.PI) / 2,
+            z: 0,
+          },
+          connection: "chineseGarden",
+          groundY: -2, // Ensure the system treats Y=0 as the ground level to prevent falling through before the model loads
+        },
+        MetaverseAPI,
+      ); // Inject MetaverseAPI as authService
+
+      // Since we are loading the Chinese Garden as the main environment, 
+      // we can also add it as a walkable surface for collision/physics.
+      // We can use the SAME path. The caching should handle it, or we simply tell it to use the main environment.
+      // But since addWalkableSurface loads its own mesh, let's keep it but maybe remove the duplicate visual.
+
+      metaverse.addWalkableSurface(
+        "chinese-garden-collider",
+        "src/assets/ChineseGarden/simpleWalkableFloor/simpleFloor_ver3.glb",
+        { x: 0, y: 0, z: 0 },
+        { x: 1, y: 1, z: 1 },
+        { x: 0, y: 0, z: 0 },
+        undefined,
+        undefined,
+        false // Make this simple floor invisible so only the detailed model is seen
+      );
+
+      // Expose metaverse instance to window for console debugging
+      window.metaverse = metaverse;
+
+      console.log("Metaverse exposed to window:", window.metaverse);
+
+      // --- FIX: Robust Float/Lock Logic ---
+      // We intercept the 'user' assignment to lock movement IMMEDIATELY when the user is created.
+      // This prevents the "race condition" where physics runs a few frames (causing falling) 
+      // before the setInterval below could catch it.
+      let _user = metaverse.user;
+      Object.defineProperty(metaverse, 'user', {
+        get: function () { return _user; },
+        set: function (newUser) {
+          _user = newUser;
+          if (_user) {
+            console.log("User created - Immediately locking gravity/movement");
+            _user.gravity = 0;
+            _user.velocity.set(0, 0, 0);
+            _user.isMovementLocked = true;
+          }
+        },
+        configurable: true
+      });
+
+      // --- Release Logic ---
+      // Wait for Floor Loaded + 2s, then release.
+      const startTime = Date.now();
+      const minWait = 2000; // Minimum 2s float
+
+      const releaseCheck = setInterval(() => {
+        if (!metaverse.user) return;
+
+        const elapsed = Date.now() - startTime;
+        const hasFloor = metaverse.user.walkableSurfaces && metaverse.user.walkableSurfaces.length > 0;
+
+        // Release if: (Time > 2s AND Floor Exists) OR (Time > 10s Failsafe)
+        if ((elapsed > minWait && hasFloor) || elapsed > 10000) {
+          clearInterval(releaseCheck);
+
+          // Restore Movement & Gravity
+          metaverse.user.isMovementLocked = false;
+          metaverse.user.gravity = -9.81;
+          metaverse.user.velocity.y = 0; // Reset vertical velocity
+
+          console.log(`Float released after ${elapsed}ms. Floor loaded: ${hasFloor}`);
+        }
+      }, 100);
+      // ------------------------------------
+
+      // --- Add Simple Water ---
+      const simpleWaterGeo = new THREE.PlaneGeometry(10, 20); // Size of the pool
+      const simpleWaterMat = new THREE.MeshStandardMaterial({
+        color: 0x00aaff, // Cyan blue
+        transparent: true,
+        opacity: 0.6,
+        roughness: 0.1, // Smooth like water
+        metalness: 0.2, // Reflective
+        side: THREE.DoubleSide
+      });
+      const simpleWater = new THREE.Mesh(simpleWaterGeo, simpleWaterMat);
+
+      simpleWater.rotation.x = -Math.PI / 2; // Lay flat
+      simpleWater.position.set(2, 1.4, -3.38); // Move above the pool floor
+      simpleWater.renderOrder = -998; // Ensure water renders after solid environment
+      metaverse.scene.add(simpleWater);
+
+      // --- Add Second Simple Water ---
+      const simpleWaterGeo2 = new THREE.PlaneGeometry(4, 8); // Adjust size as needed
+      const simpleWater2 = new THREE.Mesh(simpleWaterGeo2, simpleWaterMat); // Reuse the same material
+
+      simpleWater2.rotation.x = -Math.PI / 2; // Lay flat
+      simpleWater2.rotation.z = 0.55;
+      simpleWater2.position.set(-56.5, -0.3, -49); // Set to new position
+      simpleWater2.renderOrder = -998; // Use the same render order
+      metaverse.scene.add(simpleWater2);
+      // ---------------------------
+
+      // --- Add Third Simple Water ---
+      const simpleWaterGeo3 = new THREE.PlaneGeometry(2, 7); // Adjust size as needed
+      const simpleWater3 = new THREE.Mesh(simpleWaterGeo3, simpleWaterMat); // Reuse the same material
+
+      simpleWater3.rotation.x = -Math.PI / 2; // Lay flat
+      simpleWater3.rotation.z = 0.65;
+      simpleWater3.position.set(-87.85, 0.1, -80.9); // Set to new position
+      simpleWater3.renderOrder = -998; // Use the same render order
+      metaverse.scene.add(simpleWater3);
+      // ---------------------------
+
+      // Helper function to get position from console
+      window.getPosition = function () {
+        // Check window.metaverse (assigned above) instead of window.currentMetaverse
+        const m = window.metaverse;
+
+        if (m) {
+          // Log Camera Position
+          if (m.camera) {
+            const pos = m.camera.position;
+            console.log(`Camera Position: x=${pos.x.toFixed(2)}, y=${pos.y.toFixed(2)}, z=${pos.z.toFixed(2)}`);
+          }
+
+          // Log User Position (if available)
+          if (m.user && m.user.mesh) {
+            const uPos = m.user.mesh.position;
+            console.log(`User Position:   x=${uPos.x.toFixed(2)}, y=${uPos.y.toFixed(2)}, z=${uPos.z.toFixed(2)}`);
+            return uPos;
+          }
+
+          if (m.camera) return m.camera.position;
+        }
+
+        console.log("User/Camera not initialized yet.");
+      };
+
+      // --- Add Animated Turtles (Spawn 3) ---
+      const gltfLoader = new GLTFLoader();
+      const turtlePath = "src/assets/chineseGarden/turtle.glb";
+
+      const turtles = [];
+      const turtleClock = new THREE.Clock(); // Shared clock for all turtles
+
+      // Function to create a turtle with unique circular path parameters
+      // position: {x, y, z} center of the circle
+      // speed: movement speed (absolute value)
+      // startAngle: initial angle in DEGREES (0-360)
+      // clockwise: boolean (true = clockwise, false = counter-clockwise)
+      function spawnTurtle(position, radius, speed, startAngle = 0, clockwise = true, scale = 1) {
+
+        // Adjust speed direction based on clockwise parameter
+        const direction = clockwise ? 1 : -1;
+        const finalSpeed = Math.abs(speed) * direction;
+
+        // Convert start angle from Degrees to Radians
+        const startAngleRadians = startAngle * (Math.PI / 180);
+
+        gltfLoader.load(turtlePath, (gltf) => {
+          const turtleModel = gltf.scene;
+          turtleModel.scale.set(scale, scale, scale);
+
+          // Setup Animation
+          if (gltf.animations && gltf.animations.length > 0) {
+            const mixer = new THREE.AnimationMixer(turtleModel);
+            const action = mixer.clipAction(gltf.animations[0]);
+            action.play();
+            // Randomize start time
+            action.time = Math.random() * action.getClip().duration;
+            metaverse.objectMixers.push(mixer);
+          }
+
+          // Group handles locomotion
+          const turtleGroup = new THREE.Group();
+          turtleGroup.add(turtleModel);
+          metaverse.scene.add(turtleGroup);
+
+          // Correct Orientation
+          // Since our lookAt logic points the group forward, we align the model to face -Z (standard forward)
+          // If swimming counter-clockwise, the logic naturally works best with -Z.
+          turtleModel.rotation.y = -Math.PI / 2;
+
+          // Store state
+          turtles.push({
+            group: turtleGroup,
+            angle: startAngleRadians,
+            radius: radius,
+            speed: finalSpeed,
+            yPos: position.y,
+            center: { x: position.x, z: position.z }
+          });
+
+        }, undefined, (error) => {
+          console.warn("Could not load turtle model.", error);
+        });
+      }
+
+      // Spawn 3 Turtles with explicit center positions
+      // Arguments: Position, Radius, Speed, StartAngle(Deg), Clockwise?, Scale
+      spawnTurtle({ x: 2.5, y: 1.37, z: -12.5 }, 0.5, 0.3, 45, true);     // Turtle 1 (Clockwise)
+      spawnTurtle({ x: 0, y: 1.37, z: -9 }, 0.5, 0.2, 90, false);   // Turtle 2 (Counter-Clockwise)
+      spawnTurtle({ x: 2.5, y: 1.37, z: -3.38 }, 0.6, 0.4, 0, true);    // Turtle 3 (Clockwise)
+
+      // Override animate loop to include turtle movement and waterfall animation
+      const _superAnimate = metaverse.animate.bind(metaverse);
+      const waterfallUniforms = { time: { value: 0 } };
+
+      metaverse.animate = function () {
+        _superAnimate(); // Call original loop
+
+        const delta = turtleClock.getDelta();
+
+        // Update Turtles
+        turtles.forEach(turtle => {
+          turtle.angle += turtle.speed * delta;
+
+          const x = turtle.center.x + Math.cos(turtle.angle) * turtle.radius;
+          const z = turtle.center.z + Math.sin(turtle.angle) * turtle.radius;
+
+          turtle.group.position.set(x, turtle.yPos, z);
+
+          // Look forward along circle
+          const directionOffset = turtle.speed > 0 ? 0.1 : -0.1;
+          const targetX = turtle.center.x + Math.cos(turtle.angle + directionOffset) * turtle.radius;
+          const targetZ = turtle.center.z + Math.sin(turtle.angle + directionOffset) * turtle.radius;
+
+          turtle.group.lookAt(targetX, turtle.yPos, targetZ);
+        });
+
+        // Update Waterfall
+        waterfallUniforms.time.value += delta;
+      };
+
+      // --- Simple Waterfall ---
+      function createWaterfall(position, width, height, speed = 1) {
+        // Waterfall Plane
+        const geometry = new THREE.PlaneGeometry(width, height);
+
+        // Create a simple noise-like texture using canvas
+        const canvas = document.createElement('canvas');
+        canvas.width = 128;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#00aaff';
+        ctx.fillRect(0, 0, 128, 128);
+
+        // Add streaks
+        for (let i = 0; i < 50; i++) {
+          ctx.fillStyle = `rgba(255, 255, 255, ${Math.random() * 0.5})`;
+          const x = Math.random() * 128;
+          const rectWidth = Math.random() * 5 + 1;
+          const rectHeight = Math.random() * 64 + 32;
+          ctx.fillRect(x, Math.random() * 128, rectWidth, rectHeight);
+        }
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+
+        // Custom Shader Material for scrolling effect
+        const material = new THREE.ShaderMaterial({
+          uniforms: {
+            time: waterfallUniforms.time,
+            uTexture: { value: texture },
+            uSpeed: { value: speed }
+          },
+          vertexShader: `
+                    varying vec2 vUv;
+                    void main() {
+                        vUv = uv;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+          fragmentShader: `
+                    uniform float time;
+                    uniform sampler2D uTexture;
+                    uniform float uSpeed;
+                    varying vec2 vUv;
+                    void main() {
+                        // Scroll texture vertically
+                        vec2 uv = vUv;
+                        uv.y += time * uSpeed; 
+                        vec4 color = texture2D(uTexture, uv);
+                        // Fade edges
+                        float alpha = color.a;
+                        if(vUv.y < 0.1) alpha *= vUv.y * 10.0;
+                        gl_FragColor = vec4(color.rgb, 0.8 * alpha);
+                    }
+                `,
+          transparent: true,
+          side: THREE.DoubleSide
+        });
+
+        const waterfall = new THREE.Mesh(geometry, material);
+        waterfall.position.set(position.x, position.y, position.z);
+        waterfall.renderOrder = -997; // Ensure waterfall renders after simpleWater
+
+        // Apply rotations (X, Y, Z defaults to 0)
+        waterfall.rotation.set(
+          position.rotX || 0,
+          position.rotY || 0,
+          position.rotZ || 0
+        );
+
+        metaverse.scene.add(waterfall);
+
+        // Splash Particles at bottom (Simple Plane for now)
+        const splashGeo = new THREE.PlaneGeometry(width * 1.25, width * 1.25);
+        const splashMat = new THREE.MeshBasicMaterial({
+          map: texture,
+          transparent: true,
+          opacity: 0.5,
+          side: THREE.DoubleSide,
+          color: 0xffffff
+        });
+        const splash = new THREE.Mesh(splashGeo, splashMat);
+        splash.rotation.x = -Math.PI / 2;
+        splash.position.set(position.x, 1.45, position.z + 0.5); // Just above water surface
+        splash.renderOrder = 4; // Ensure splash renders perfectly on top of waterfall/water
+        metaverse.scene.add(splash);
+      }
+
+      // Add Waterfall
+      // rotY: 30 deg (Yaw), rotX: 5 deg (Pitch - tilt forward/back), rotZ: 0 deg (Roll - tilt sideways)
+      createWaterfall({
+        x: 3,
+        y: 2.9,
+        z: -1.5,
+        rotY: 0 * (Math.PI / 180),
+        rotX: 30 * (Math.PI / 180), // Tilted "backward" slightly so water flows "down" naturally
+        rotZ: 0 * (Math.PI / 180)
+      }, 2, 3.5);
+      // ---------------------------
+      // ---------------------------
+
+      // --- Add Big Sphere Model ---
+      const bigSpherePath = "src/assets/ChineseGarden/bigSphere.glb";
+      const bigSphereOpacity = 0.55; // Option for opacity
+      gltfLoader.load(bigSpherePath, (gltf) => {
+        const bigSphereModel = gltf.scene;
+
+        // Apply opacity
+        bigSphereModel.traverse((child) => {
+          if (child.isMesh) {
+            if (child.material) {
+              // If it's an array of materials
+              if (Array.isArray(child.material)) {
+                child.material.forEach(mat => {
+                  mat.transparent = true;
+                  mat.opacity = bigSphereOpacity;
+                  mat.depthWrite = false; // helpful for transparent spheres
+                });
+              } else {
+                child.material.transparent = true;
+                child.material.opacity = bigSphereOpacity;
+                child.material.depthWrite = false;
+              }
+            }
+            child.renderOrder = -999;
+          }
+        });
+
+        bigSphereModel.position.set(0, 0, 0);
+        metaverse.scene.add(bigSphereModel);
+        console.log(`Big Sphere loaded with opacity ${bigSphereOpacity}`);
+      }, undefined, (error) => {
+        console.error("Error loading Big Sphere:", error);
+      });
+      // ------------------------------
+
+      // Fix for Disappearing Models (Frustum Culling) & Transparency Sorting Issues
+      // We set up a small interval to constantly check if the environment has loaded,
+      // and when it does, we disable 'frustumCulled' to prevent it from disappearing
+      // when the camera looks in certain directions, and we fix alpha blending.
+      const checkInterval = setInterval(() => {
+        if (metaverse.environment) {
+          metaverse.environment.traverse((child) => {
+            if (child.isMesh) {
+              // Disable frustum culling: forces Three.js to always render this 
+              // regardless of camera angle. Fixes models with bad bounding boxes.
+              child.frustumCulled = false;
+
+              // Remove hardcoded renderOrders and instead fix the underlying transparency issue.
+              // GLTFs often export with "Alpha Blend" when they should use "Alpha Clip" (alphaTest).
+              // This causes depth sorting issues when the camera rotates.
+              if (child.material) {
+                const materials = Array.isArray(child.material) ? child.material : [child.material];
+                materials.forEach(mat => {
+                  if (mat.transparent && mat.opacity >= 0.99) {
+                    mat.transparent = false; // Disable z-sorting dependency
+                    mat.alphaTest = 0.5;     // Discard pixels with low alpha (e.g., leaves/fences)
+                    mat.depthWrite = true;   // Ensure it writes to the depth buffer
+                  }
+                });
+              }
+              
+              // You can still hide specific meshes if needed
+              if (child.name === 'tripo_node_0e784e2c-08f0-434d-8daa-f0e5bfeb0708.002') {
+                child.visible = false; 
+              }
+            }
+          });
+          console.log("Frustum culling disabled and transparency sorting fixed for environment model.");
+          clearInterval(checkInterval); // Stop checking once applied
+        }
+      }, 500); // Check every 500ms
+      // -----------------------------------------------------
+
+    }
+    MetaverseAPI.initializeApp(initMetaverse, "main");
+  </script>
+</body>
+
+</html>
