@@ -111,7 +111,7 @@ A web-based editor allowing users to place and modify virtual buildings.
 
 This architecture illustrates how the Three.js building editor communicates with the backend services responsible for authentication, room persistence, asset management, and texture uploads.
 
-<p align="center"> <img src="images/backend-architecture.jpg" width="550"> </p>
+<p align="center"> <img src="images/backend-architecture.jpg" width="700"> </p>
 
 ### Database Design
 
@@ -136,28 +136,27 @@ Security mechanisms include:
 ---
 ## Engineering Highlights
 
-### Procedural Geometry
+#### Procedural Geometry
 
 - Image → Mesh generation
 - Radial symmetry generation
 
-### Performance Optimization
+#### Performance Optimization
 
 - Dual mesh collision
 - Material optimization
 
-### AI Integration
+#### AI Integration
 
 - Hybrid AI modelling
 - Asset refinement
 
-### Blender Automation
+#### Blender Automation
 
 - Python scripting
 - Mesh repair
 - Denoising
 
----
 ## Key Skills Demonstrated
 
 - Real-time 3D Graphics
